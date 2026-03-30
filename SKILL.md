@@ -19,16 +19,34 @@ Autonomous workflow for triaging GitHub issues, selecting impactful bugs, invest
 > **NO PR WITHOUT UNDERSTANDING THE ROOT CAUSE FIRST.**
 > Triage is not "pick the easiest issue." Triage is "find the highest-impact fixable issue and prove you understand why it's broken before touching the code."
 
+## Autonomy Model
+
+This skill runs **fully autonomously** — no human approval gates. Instead, the agent
+self-validates at each phase using confidence checks. If confidence is insufficient,
+the agent **does not ask the user** — it skips to the next candidate or aborts with
+a clear explanation of why it couldn't proceed.
+
+**Self-validation principle:** At each decision point, the agent must be able to answer
+these questions affirmatively before proceeding:
+
+1. **Can I state the root cause in one sentence?** (not "something is wrong" — the *specific* reason)
+2. **Can I name the exact file(s) and function(s) that need changing?**
+3. **Can I describe the fix without hand-waving?** (not "add error handling" — the *exact* change)
+4. **Can I explain why this fix won't break anything else?**
+
+If any answer is "no", the agent either investigates deeper or moves to the next issue.
+It never guesses and never asks the user to fill in gaps it should resolve itself.
+
 ## Overview
 
-This skill operates in **six phases**:
+This skill operates in **six phases**, flowing continuously without user interaction:
 
 1. **FETCH** — Pull open issues from a GitHub repository
 2. **TRIAGE** — Score and rank issues by severity, impact, and fix clarity
-3. **INVESTIGATE** — Deep-dive the top candidate: read source, trace the bug, identify root cause
+3. **INVESTIGATE** — Deep-dive the top candidate: read source, trace the bug, identify root cause. If root cause can't be determined, automatically fall back to the next candidate.
 4. **FIX** — Create branch, apply minimal correct fix, run tests
 5. **PR** — Open a pull request following the repo's contributing conventions
-6. **FOLLOW-UP** — Comment on the issue, link the PR, clean up
+6. **FOLLOW-UP** — Comment on the issue, link the PR, report summary
 
 ---
 
@@ -47,6 +65,15 @@ This skill operates in **six phases**:
 - The repo has no open issues
 - User wants to create issues, not fix them (use `github-issues` skill instead)
 - The fix requires multi-week effort or cross-team coordination
+
+## Execution Mode
+
+This skill runs **end-to-end without stopping for approval**. The agent:
+- Selects the best issue autonomously based on scoring
+- Falls back to the next candidate if investigation hits a dead end
+- Self-validates root cause understanding before writing any code
+- Only reports back to the user when the pipeline completes (PR opened) or
+  when no actionable issue could be found (with explanation of why each was skipped)
 
 ---
 
@@ -180,14 +207,28 @@ python3 ~/.hermes/skills/github/issue-triage-pr/scripts/triage_issues.py \
 - [ ] Issues ranked by total score
 - [ ] Top candidate identified with justification
 - [ ] No competing PR exists for the top candidate
-- [ ] User approves the selected issue before proceeding
+- [ ] Candidate queue built (ranked list to fall back through if top pick fails investigation)
 
-### Red Flags — STOP and Re-Triage
+### Auto-Selection Logic
 
-- The top issue has no reproduction steps AND no error trace → needs more info first
-- The issue author says "I'd like to fix this myself" → respect their intent, pick another
-- The issue has been open for months with active discussion → likely contentious, avoid
-- The fix would touch security-critical code → extra scrutiny needed, flag to user
+Work through the ranked list top-down. For each candidate, apply these **gate checks**
+before committing to investigate:
+
+1. **Not BLOCKED** — no competing open PR
+2. **Not claimed** — issue author hasn't said "I'd like to fix this myself"
+3. **Minimum clarity** — has at least an error trace OR reproduction steps OR a proposed fix
+4. **Not contentious** — no long unresolved design debate in comments
+5. **Not security-critical** — doesn't touch auth, crypto, or secret handling (unless the fix is trivially safe, e.g., adding a null check)
+
+If a candidate fails any gate, skip it silently and try the next one. If all candidates
+fail, report the triage results and explain why none were actionable.
+
+### Red Flags — Auto-Skip to Next Candidate
+
+- The top issue has no reproduction steps AND no error trace → skip, try next
+- The issue author says "I'd like to fix this myself" → respect their intent, skip
+- The issue has been open for months with active unresolved debate → contentious, skip
+- The fix would touch security-critical code paths → skip unless fix is trivially safe
 
 ---
 
@@ -269,7 +310,7 @@ git log --oneline -10 -- gateway.py
 git blame -L 35,50 gateway.py
 ```
 
-### 3.4 — Formulate Root Cause Hypothesis
+### 3.4 — Formulate and Self-Validate Root Cause
 
 Before writing any fix, articulate:
 
@@ -279,22 +320,44 @@ Before writing any fix, articulate:
 4. **What could go wrong** — potential regressions from the fix
 5. **How to verify** — test(s) that confirm the fix works
 
-Write this down as a comment for the user before proceeding.
+### 3.5 — Confidence Gate (Self-Validation)
+
+Before proceeding to Phase 4, pass ALL of these checks internally:
+
+| Check | Pass Condition | Fail Action |
+|-------|---------------|-------------|
+| **Root cause is specific** | Can state it in one sentence naming the exact file, function, and defect | Investigate deeper — read more code, trace further |
+| **Fix is concrete** | Can describe the exact code change (not "add error handling" — the specific lines) | Read more surrounding code until the change is clear |
+| **Files are identified** | Know every file that needs modification | Search the codebase for all references to the broken path |
+| **Regression risk is bounded** | Can explain why the fix won't break other callers/paths | Read callers, check tests, trace impact |
+| **Fix is within scope** | Change is <50 lines across ≤3 files | If larger, this issue is too complex — **fall back to next candidate** |
+
+**If any check fails after reasonable investigation (3+ attempts to resolve it),
+do not ask the user.** Fall back to the next ranked issue and restart from Phase 3.
+Log why the candidate was dropped:
+
+```
+Skipped #NNN: Could not determine root cause — error trace points to
+third-party dependency (requests library), not project code.
+Falling back to #NNN (next candidate).
+```
 
 ### Completion Criteria
 
-- [ ] Contributing guidelines read and conventions extracted
+- [ ] Contributing guidelines and agent instructions read and conventions extracted
 - [ ] Source code at the crash/bug site read and understood
-- [ ] Root cause hypothesis formulated and documented
-- [ ] Fix approach approved by user before proceeding
-- [ ] Potential regressions identified
+- [ ] Root cause articulated as a specific, one-sentence statement
+- [ ] Fix approach described as concrete code changes (files, functions, exact modifications)
+- [ ] Potential regressions identified and bounded
+- [ ] All 5 confidence gate checks passed
 
-### Red Flags — STOP and Reassess
+### Red Flags — Auto-Fallback to Next Candidate
 
-- You can't reproduce the issue from the description → ask the issue author for more info
-- The root cause is in a dependency, not the project itself → different fix approach needed
-- The fix requires changing a public API → escalate scope, may need discussion issue first
-- Multiple bugs are tangled together → fix only the one reported, note the others
+- Can't identify root cause after reading the source → fall back to next candidate
+- Root cause is in a dependency, not the project itself → fall back, note in skip log
+- Fix requires changing a public API → too risky for autonomous fix, fall back
+- Multiple bugs are tangled together → fix only the one reported if separable, otherwise fall back
+- Fix would exceed 50 lines or touch >3 files → scope too large, fall back
 
 ---
 
@@ -544,12 +607,15 @@ Provide a summary:
 | Rationalization | Reality |
 |----------------|---------|
 | "I'll just fix the obvious thing without reading CONTRIBUTING" | Every repo has conventions. Ignoring them guarantees review friction or rejection. |
+| "I'll also read AGENTS.md later, CONTRIBUTING is enough" | Agent instruction files contain architecture boundaries, import rules, and restricted paths. Skipping them means violating project structure. |
 | "This issue is probably easy, I don't need to trace the code" | Easy-looking issues often have subtle root causes. Investigate first. |
 | "I'll also clean up the surrounding code while I'm here" | Scope creep kills PRs. Fix the bug, nothing more. |
 | "The tests pass locally so it's fine" | CI may have different configs, Python versions, or OS. Wait for CI. |
 | "I'll skip the regression test since the fix is obvious" | Obvious fixes break in obvious ways when someone refactors later. Add the test. |
 | "I'll force-push to clean up the history" | Maintainers may have already reviewed. Never force-push after opening a PR. |
-| "This vague issue is probably about X" | Don't guess. If the issue is unclear, ask for clarification before fixing. |
+| "This vague issue is probably about X" | Don't guess. If the issue is unclear, **skip it and move to the next candidate**. Never guess root cause. |
+| "I'm not sure about the root cause but I'll try a fix anyway" | This is the #1 cause of rejected PRs. If you can't state the root cause in one sentence, you don't understand it. Fall back to the next issue. |
+| "I should ask the user what they think" | You have the codebase, the issue, the error trace, and the contributing docs. Investigate deeper instead of asking. Only report back when done or when all candidates are exhausted. |
 
 ---
 

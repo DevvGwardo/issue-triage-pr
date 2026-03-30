@@ -20,7 +20,8 @@ Use this checklist to track progress through the full pipeline.
 - [ ] Checked for competing PRs on top candidates
 - [ ] Triage report generated with rankings
 - [ ] Top candidate selected with justification
-- [ ] User approved the selected issue
+- [ ] Candidate queue built (fallback list if top pick fails)
+- [ ] Auto-selection gate checks passed (not blocked, not claimed, minimum clarity)
 
 ## Phase 3: INVESTIGATE
 
@@ -45,8 +46,11 @@ Use this checklist to track progress through the full pipeline.
 - [ ] Surrounding code context understood
 - [ ] Git blame reviewed for relevant lines
 - [ ] Related tests identified and read
-- [ ] Root cause hypothesis formulated
-- [ ] Potential regressions identified
+- [ ] Root cause stated as specific one-sentence statement
+- [ ] Fix described as concrete code changes (files, functions, exact modifications)
+- [ ] Potential regressions identified and bounded
+- [ ] Confidence gate passed (all 5 self-validation checks)
+- [ ] If confidence gate failed → fell back to next candidate
 - [ ] Fix approach documented for user review
 - [ ] User approved fix approach
 
