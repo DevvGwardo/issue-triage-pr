@@ -24,13 +24,19 @@ Use this checklist to track progress through the full pipeline.
 
 ## Phase 3: INVESTIGATE
 
-### 3a: Conventions
+### 3a: Conventions & Agent Instructions
 - [ ] Repo cloned or navigated to
 - [ ] CONTRIBUTING.md read
+- [ ] AI agent instruction files scanned (AGENTS.md, CLAUDE.md, .cursorrules, etc.)
+- [ ] Nested AGENTS.md files checked (per-directory guides)
+- [ ] Architecture boundaries and import rules noted
+- [ ] Restricted paths / CODEOWNERS rules noted
+- [ ] Coding style and naming conventions noted
 - [ ] Branch naming convention noted
 - [ ] Commit message format noted
 - [ ] Test command identified
 - [ ] Lint requirements identified
+- [ ] Build gate commands identified (from agent instructions)
 - [ ] PR template found (if exists)
 - [ ] CLA/DCO requirements checked
 

@@ -195,9 +195,9 @@ python3 ~/.hermes/skills/github/issue-triage-pr/scripts/triage_issues.py \
 
 Deep-dive the selected issue. Understand the root cause before writing any code.
 
-### 3.1 — Read Contributing Guidelines
+### 3.1 — Read Contributing Guidelines and Agent Instructions
 
-**Always check the repo's contributing conventions first.** This determines branch naming, commit format, test requirements, and PR template.
+**Always check the repo's contributing conventions AND AI-agent instruction files first.** These determine branch naming, commit format, test requirements, PR template, architecture boundaries, coding style, and rules that AI agents must follow.
 
 ```bash
 # Clone the repo (or navigate to existing clone)
@@ -209,9 +209,21 @@ for f in CONTRIBUTING.md CONTRIBUTING .github/CONTRIBUTING.md DEVELOPMENT.md doc
   if [ -f "$f" ]; then
     echo "=== Found: $f ==="
     cat "$f"
-    break
   fi
 done
+
+# Read AI-agent instruction files — these contain project-specific rules
+# that override default behavior (architecture boundaries, import rules,
+# build gates, coding style, naming conventions, etc.)
+for f in AGENTS.md CLAUDE.md .cursorrules .github/copilot-instructions.md .windsurfrules .clinerules CONVENTIONS.md; do
+  if [ -f "$f" ]; then
+    echo "=== Found agent instructions: $f ==="
+    cat "$f"
+  fi
+done
+
+# Check for nested AGENTS.md files (some repos use per-directory agent guides)
+find . -name "AGENTS.md" -not -path "./.git/*" -maxdepth 3 2>/dev/null
 
 # Check for PR templates
 ls -la .github/PULL_REQUEST_TEMPLATE* .github/pull_request_template* 2>/dev/null
@@ -225,6 +237,10 @@ Extract and record:
 - [ ] PR description template or required sections
 - [ ] Any CI/linting requirements
 - [ ] Code style preferences
+- [ ] Architecture boundaries and import rules (from AGENTS.md / CLAUDE.md)
+- [ ] Build/test/lint gate commands (from agent instructions)
+- [ ] File ownership or restricted paths (e.g., CODEOWNERS rules)
+- [ ] Naming conventions and terminology rules
 
 ### 3.2 — Extract Conventions Automatically
 

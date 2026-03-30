@@ -43,6 +43,135 @@ def find_contributing_docs(repo: Path) -> dict[str, str]:
     return found
 
 
+def find_agent_instructions(repo: Path) -> dict[str, str]:
+    """Locate and read AI-agent instruction files (AGENTS.md, CLAUDE.md, etc.).
+
+    These files contain project-specific rules for AI agents: architecture
+    boundaries, import rules, build gates, coding style, naming conventions,
+    restricted paths, and other constraints that override default behavior.
+    """
+    # Root-level agent instruction files
+    root_candidates = [
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".cursorrules",
+        ".github/copilot-instructions.md",
+        ".windsurfrules",
+        ".clinerules",
+        "CONVENTIONS.md",
+    ]
+    found: dict[str, str] = {}
+    for name in root_candidates:
+        content = read_file(repo / name)
+        if content:
+            found[name] = content
+
+    # Scan for nested AGENTS.md files (some repos use per-directory guides)
+    try:
+        for agents_file in repo.rglob("AGENTS.md"):
+            rel = str(agents_file.relative_to(repo))
+            if rel.startswith(".git"):
+                continue
+            # Limit depth to avoid crawling deep into node_modules etc.
+            if rel.count(os.sep) > 3:
+                continue
+            if rel not in found:
+                content = read_file(agents_file)
+                if content:
+                    found[rel] = content
+    except OSError:
+        pass
+
+    return found
+
+
+def extract_agent_conventions(texts: dict[str, str]) -> dict[str, list[str]]:
+    """Extract structured conventions from agent instruction files."""
+    result: dict[str, list[str]] = {
+        "architecture_boundaries": [],
+        "build_gates": [],
+        "coding_style": [],
+        "restricted_paths": [],
+        "naming_conventions": [],
+        "import_rules": [],
+    }
+
+    all_text = "\n".join(texts.values())
+
+    # Architecture boundaries
+    boundary_patterns = [
+        r"(?i)(?:architecture|module|import)\s+boundar(?:y|ies)[^\n]*",
+        r"(?i)rule:\s+[^\n]+",
+        r"(?i)do\s+not\s+import\s+[^\n]+",
+    ]
+    for pattern in boundary_patterns:
+        for match in re.finditer(pattern, all_text):
+            line = match.group(0).strip()
+            if line and line not in result["architecture_boundaries"]:
+                result["architecture_boundaries"].append(line)
+
+    # Build gates / verification commands
+    gate_patterns = [
+        r"(?i)(?:build|test|lint|format|type[- ]?check)\s+(?:gate|command|step)[^\n]*:\s*`([^`]+)`",
+        r"(?i)(?:pnpm|npm|yarn|bun|cargo|make|pytest|go)\s+(?:test|check|build|lint|format)[^\s]*",
+    ]
+    for pattern in gate_patterns:
+        for match in re.finditer(pattern, all_text):
+            cmd = match.group(0).strip()
+            if cmd and cmd not in result["build_gates"]:
+                result["build_gates"].append(cmd)
+
+    # Coding style rules
+    style_patterns = [
+        r"(?i)(?:prefer|avoid|never|always|do not)\s+(?:use\s+)?`?(?:any|unknown|strict|ESM|CommonJS)[^\n]*",
+        r"(?i)formatting.*(?:via|using|with)\s+\w+",
+        r"(?i)never\s+add\s+[^\n]+",
+    ]
+    for pattern in style_patterns:
+        for match in re.finditer(pattern, all_text):
+            rule = match.group(0).strip()
+            if rule and len(rule) > 10 and rule not in result["coding_style"]:
+                result["coding_style"].append(rule)
+
+    # Restricted paths / CODEOWNERS
+    restricted_patterns = [
+        r"(?i)(?:do not edit|restricted|codeowners)[^\n]*",
+        r"(?i)treat\s+(?:those|these)\s+paths\s+as\s+restricted[^\n]*",
+    ]
+    for pattern in restricted_patterns:
+        for match in re.finditer(pattern, all_text):
+            rule = match.group(0).strip()
+            if rule and rule not in result["restricted_paths"]:
+                result["restricted_paths"].append(rule)
+
+    # Naming conventions
+    naming_patterns = [
+        r"(?i)nomenclature:\s+[^\n]+",
+        r"(?i)(?:naming|terminology)\s+(?:convention|rule|pattern)[^\n]*",
+        r"(?i)use\s+[\"'][\w-]+[\"']\s+(?:in\s+)?(?:docs|UI|code)[^\n]*",
+    ]
+    for pattern in naming_patterns:
+        for match in re.finditer(pattern, all_text):
+            rule = match.group(0).strip()
+            if rule and rule not in result["naming_conventions"]:
+                result["naming_conventions"].append(rule)
+
+    # Import rules
+    import_patterns = [
+        r"(?i)import\s+boundar(?:y|ies)[^\n]*",
+        r"(?i)(?:must|should|must not|should not)\s+import\s+[^\n]+",
+        r"(?i)(?:extensions?|plugins?)\s+must\s+(?:cross|import|use)[^\n]+",
+    ]
+    for pattern in import_patterns:
+        for match in re.finditer(pattern, all_text):
+            rule = match.group(0).strip()
+            if rule and rule not in result["import_rules"]:
+                result["import_rules"].append(rule)
+
+    # Filter out empty categories
+    return {k: v for k, v in result.items() if v}
+
+
 def find_pr_template(repo: Path) -> str | None:
     """Locate and read the pull request template."""
     candidates = [
@@ -293,6 +422,8 @@ def find_ci_workflows(repo: Path) -> list[str]:
 def generate_markdown(
     repo: Path,
     contributing_docs: dict[str, str],
+    agent_instructions: dict[str, str],
+    agent_conventions: dict[str, list[str]],
     branch_convention: str | None,
     commit_format: str | None,
     test_command: str | None,
@@ -315,6 +446,37 @@ def generate_markdown(
     else:
         lines.append("_No contributing documentation found._")
     lines.append("")
+
+    # Agent instruction files
+    lines.append("## AI Agent Instructions")
+    if agent_instructions:
+        for name in agent_instructions:
+            lines.append(f"- `{name}`")
+        lines.append("")
+        lines.append("**IMPORTANT:** These files contain project-specific rules that AI agents")
+        lines.append("must follow. Read them in full before making changes.")
+    else:
+        lines.append("_No AI agent instruction files found (AGENTS.md, CLAUDE.md, etc.)._")
+    lines.append("")
+
+    # Extracted agent conventions (structured)
+    if agent_conventions:
+        category_labels = {
+            "architecture_boundaries": "Architecture Boundaries",
+            "build_gates": "Build / Verification Gates",
+            "coding_style": "Coding Style Rules",
+            "restricted_paths": "Restricted Paths / Ownership",
+            "naming_conventions": "Naming Conventions / Terminology",
+            "import_rules": "Import / Module Boundary Rules",
+        }
+        for key, items in agent_conventions.items():
+            label = category_labels.get(key, key.replace("_", " ").title())
+            lines.append(f"### {label}")
+            for item in items[:10]:  # Cap at 10 per category to keep output manageable
+                lines.append(f"- {item}")
+            if len(items) > 10:
+                lines.append(f"- _...and {len(items) - 10} more (read source files for full list)_")
+            lines.append("")
 
     # Branch naming
     lines.append("## Branch Naming Convention")
@@ -392,33 +554,44 @@ def main() -> None:
     contributing_docs = find_contributing_docs(repo)
     all_contributing_text = "\n\n".join(contributing_docs.values())
 
-    # 2. Branch convention
-    branch_convention = extract_branch_convention(all_contributing_text) if all_contributing_text else None
+    # 2. AI agent instruction files
+    agent_instructions = find_agent_instructions(repo)
+    agent_conventions = extract_agent_conventions(agent_instructions) if agent_instructions else {}
 
-    # 3. Commit format
-    commit_format = extract_commit_format(all_contributing_text) if all_contributing_text else None
+    # Combine contributing + agent text for convention extraction
+    all_text = all_contributing_text
+    if agent_instructions:
+        all_text += "\n\n" + "\n\n".join(agent_instructions.values())
 
-    # 4. License requirement
-    license_req = extract_license_requirement(all_contributing_text) if all_contributing_text else None
+    # 3. Branch convention
+    branch_convention = extract_branch_convention(all_text) if all_text else None
 
-    # 5. Test and lint commands
+    # 4. Commit format
+    commit_format = extract_commit_format(all_text) if all_text else None
+
+    # 5. License requirement
+    license_req = extract_license_requirement(all_text) if all_text else None
+
+    # 6. Test and lint commands
     test_command = detect_test_command(repo)
     lint_command = detect_lint_command(repo)
 
-    # 6. PR template
+    # 7. PR template
     pr_template_raw = find_pr_template(repo)
     pr_template_sections = extract_pr_template_sections(pr_template_raw) if pr_template_raw else []
 
-    # 7. Issue templates
+    # 8. Issue templates
     issue_templates = find_issue_templates(repo)
 
-    # 8. CI workflows
+    # 9. CI workflows
     ci_workflows = find_ci_workflows(repo)
 
     # Generate and print output
     output = generate_markdown(
         repo=repo,
         contributing_docs=contributing_docs,
+        agent_instructions=agent_instructions,
+        agent_conventions=agent_conventions,
         branch_convention=branch_convention,
         commit_format=commit_format,
         test_command=test_command,
